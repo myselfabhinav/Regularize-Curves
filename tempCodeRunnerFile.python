@@ -1,0 +1,99 @@
+import pandas as pd
+import numpy as np
+from sklearn.linear_model import LinearRegression
+from scipy.optimize import curve_fit
+from svgwrite import Drawing
+
+# Function to load datasets without headers
+def load_datasets():
+    datasets = {
+        'frag0': pd.read_csv('dataset/frag0.csv', header=None),
+        'frag1': pd.read_csv('dataset/frag1.csv', header=None),
+        'frag01_sol': pd.read_csv('dataset/frag01_sol.csv', header=None),
+        'frag2': pd.read_csv('dataset/frag2.csv', header=None),
+        'frag2_sol': pd.read_csv('dataset/frag2_sol.csv', header=None),
+        'isolated': pd.read_csv('dataset/isolated.csv', header=None),
+        'isolated_sol': pd.read_csv('dataset/isolated_sol.csv', header=None),
+        'occlusion1': pd.read_csv('dataset/occlusion1.csv', header=None),
+        'occlusion1_sol': pd.read_csv('dataset/occlusion1_sol.csv', header=None),
+        'occlusion2': pd.read_csv('dataset/occlusion2.csv', header=None),
+        'occlusion2_sol': pd.read_csv('dataset/occlusion2_sol.csv', header=None),
+    }
+    return datasets
+
+# Function to parse polyline data from the DataFrame
+def parse_polyline_data(df):
+    polylines = []
+    for _, row in df.iterrows():
+        points = [(row[i], row[i+1]) for i in range(0, len(row), 2)]
+        polylines.append(points)
+    return polylines
+
+# Function to identify and regularize straight lines using linear regression
+def identify_straight_lines(polyline):
+    x = np.array([p[0] for p in polyline]).reshape(-1, 1)
+    y = np.array([p[1] for p in polyline])
+    reg = LinearRegression().fit(x, y)
+    return reg
+
+# Function to identify circles and ellipses using curve fitting
+def identify_circle_ellipse(polyline):
+    x = np.array([p[0] for p in polyline])
+    y = np.array([p[1] for p in polyline])
+
+    def ellipse_func(x, a, b, h, k):
+        return b * np.sqrt(1 - ((x - h) ** 2 / a ** 2)) + k
+
+    try:
+        params, _ = curve_fit(ellipse_func, x, y, maxfev=10000)
+    except RuntimeError:
+        params = None
+    return params
+
+# Function to convert points to cubic Bézier curves
+def to_cubic_bezier(points):
+    bezier_curves = []
+    for i in range(0, len(points) - 3, 3):
+        p0, p1, p2, p3 = points[i:i+4]
+        bezier_curves.append([p0, p1, p2, p3])
+    return bezier_curves
+
+# Function to regularize curves
+def regularize_curves(polylines):
+    regularized_curves = []
+    for polyline in polylines:
+        if len(polyline) < 4:
+            continue
+        reg_line = identify_straight_lines(polyline)
+        circle_params = identify_circle_ellipse(polyline)
+        bezier_curve = to_cubic_bezier(polyline)
+        regularized_curves.append(bezier_curve)
+    return regularized_curves
+
+# Function to visualize results using SVG
+def visualize_curves(curves, filename='output.svg'):
+    dwg = Drawing(filename, profile='tiny', size=(800, 600))
+    for curve in curves:
+        for bezier in curve:
+            p0, p1, p2, p3 = bezier
+            path_data = "M{} {} C{} {}, {} {}, {} {}".format(
+                p0[0], p0[1], p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]
+            )
+            dwg.add(dwg.path(d=path_data, stroke="black", fill="none"))
+    dwg.save()
+
+# Function to train the model
+def train_model(datasets):
+    for key, df in datasets.items():
+        if 'sol' not in key:
+            polylines = parse_polyline_data(df)
+            regularized_curves = regularize_curves(polylines)
+            visualize_curves(regularized_curves, filename=f'{key}_output.svg')
+
+# Main function
+def main():
+    datasets = load_datasets()
+    train_model(datasets)
+
+if __name__ == "__main__":
+    main()

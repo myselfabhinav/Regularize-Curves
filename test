@@ -1,0 +1,5 @@
+import pandas as pd
+
+# Load one of your datasets to inspect
+df = pd.read_csv('dataset/frag0.csv')
+print(df.columns)

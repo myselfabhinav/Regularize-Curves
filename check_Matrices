@@ -1,0 +1,62 @@
+import numpy as np
+import os
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, accuracy_score
+import matplotlib.pyplot as plt
+
+dataset_paths = {
+    'frag0': 'dataset/frag0.csv',
+    'frag1': 'dataset/frag1.csv',
+    'frag01_sol': 'dataset/frag01_sol.csv',
+    'frag2': 'dataset/frag2.csv',
+    'frag2_sol': 'dataset/frag2_sol.csv',
+    'isolated': 'dataset/isolated.csv',
+    'isolated_sol': 'dataset/isolated_sol.csv',
+    'occlusion1': 'dataset/occlusion1.csv',
+    'occlusion1_sol': 'dataset/occlusion1_sol.csv',
+    'occlusion2': 'dataset/occlusion2.csv',
+    'occlusion2_sol': 'dataset/occlusion2_sol.csv'
+}
+
+def load_dataset(file_path):
+    try:
+        data = np.loadtxt(file_path, delimiter=',')  
+        print(f"Loaded data from {file_path}, shape: {data.shape}")
+    except Exception as e:
+        print(f"Error loading {file_path}: {e}")
+        return None
+    return data
+
+def load_and_preprocess_datasets(dataset_paths):
+    data = []
+    labels = []
+    for label, path in dataset_paths.items():
+        if not os.path.exists(path):
+            print(f"Path not found: {path}")
+            continue
+        file_data = load_dataset(path)
+        if file_data is not None:
+            data.append(file_data)
+            labels.extend([label] * len(file_data))  
+    return np.vstack(data), np.array(labels)
+
+
+X, y = load_and_preprocess_datasets(dataset_paths)
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+
+
+model = RandomForestClassifier(n_estimators=100, random_state=42)
+model.fit(X_train, y_train)
+
+
+y_pred = model.predict(X_test)
+
+
+print("Classification Report:")
+print(classification_report(y_test, y_pred))
+print("Accuracy Score:")
+print(accuracy_score(y_test, y_pred))
+
+
