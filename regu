@@ -1,111 +1,103 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
-from scipy.spatial import ConvexHull
 from scipy.optimize import curve_fit
+from shapely.geometry import Polygon
+import cv2
 import svgwrite
-
-
-def load_data(file_paths):
-    data_frames = {}
-    for path in file_paths:
-        df = pd.read_csv(path, header=None)
-        data_frames[path] = df
-    return data_frames
-
-
-def visualize_data(data_frames):
-    plt.figure(figsize=(12, 8))
-    for path, df in data_frames.items():
-        plt.plot(df[2], df[3], label=path)
-    plt.xlabel('X-axis')
-    plt.ylabel('Y-axis')
-    plt.title('Curve Visualization')
-    plt.legend()
-    plt.grid(True)
-    plt.show()
 
 
 def fit_circle(x, y):
     def circle_model(params, x, y):
-        a, b, r = params
-        return (x - a) ** 2 + (y - b) ** 2 - r ** 2
+        cx, cy, r = params
+        return np.sqrt((x - cx) ** 2 + (y - cy) ** 2) - r
 
-    x_mean, y_mean = np.mean(x), np.mean(y)
-    initial_guess = [x_mean, y_mean, np.mean(np.sqrt((x - x_mean) ** 2 + (y - y_mean) ** 2))]
+    initial_guess = [np.mean(x), np.mean(y), np.std(x)]
+    print(f"Initial Guess for Circle: {initial_guess}")
 
-    params, _ = curve_fit(lambda params, x, y: circle_model(params, x, y), 
-                         (x, y), np.zeros_like(x), p0=initial_guess)
+    try:
+        params, _ = curve_fit(
+            lambda xy, cx, cy, r: circle_model([cx, cy, r], *xy),
+            (x, y),
+            np.zeros_like(x),
+            p0=initial_guess,
+            maxfev=4000
+        )
+        print(f"Fitted Parameters for Circle: {params}")
+    except RuntimeError as e:
+        print(f"Error fitting circle: {e}")
+        params = [np.nan] * 3
+
     return params
-
 
 def fit_ellipse(x, y):
     def ellipse_model(params, x, y):
-        a, b, r_x, r_y, theta = params
-        x_rot = np.cos(theta) * (x - a) + np.sin(theta) * (y - b)
-        y_rot = -np.sin(theta) * (x - a) + np.cos(theta) * (y - b)
-        return (x_rot / r_x) ** 2 + (y_rot / r_y) ** 2 - 1
+        a, b, x0, y0, theta = params
+        x_rot = (x - x0) * np.cos(theta) + (y - y0) * np.sin(theta)
+        y_rot = -(x - x0) * np.sin(theta) + (y - y0) * np.cos(theta)
+        return (x_rot / a) ** 2 + (y_rot / b) ** 2 - 1
 
-    x_mean, y_mean = np.mean(x), np.mean(y)
-    initial_guess = [x_mean, y_mean, np.std(x), np.std(y), 0]
+    x_range = np.max(x) - np.min(x)
+    y_range = np.max(y) - np.min(y)
+    initial_guess = [x_range / 2, y_range / 2, np.mean(x), np.mean(y), 0]
+    print(f"Initial Guess for Ellipse: {initial_guess}")
 
-    params, _ = curve_fit(lambda params, x, y: ellipse_model(params, x, y), 
-                         (x, y), np.zeros_like(x), p0=initial_guess)
+    try:
+        params, _ = curve_fit(
+            lambda xy, a, b, x0, y0, theta: ellipse_model([a, b, x0, y0, theta], *xy),
+            (x, y),
+            np.zeros_like(x),
+            p0=initial_guess,
+            maxfev=4000
+        )
+        print(f"Fitted Parameters for Ellipse: {params}")
+    except RuntimeError as e:
+        print(f"Error fitting ellipse: {e}")
+        params = [np.nan] * 5
+
     return params
 
-# Identify shapes from curves
+
 def is_circle(points, tolerance=0.1):
     x, y = points[:, 0], points[:, 1]
     params = fit_circle(x, y)
-    center = (params[0], params[1])
-    radius = params[2]
-    distances = np.sqrt((x - center[0]) ** 2 + (y - center[1]) ** 2)
-    return np.all(np.abs(distances - radius) < tolerance)
+    cx, cy, r = params
+    distances = np.sqrt((x - cx)**2 + (y - cy)**2)
+    return np.all(np.abs(distances - r) < tolerance)
 
 def is_ellipse(points, tolerance=0.1):
     x, y = points[:, 0], points[:, 1]
     params = fit_ellipse(x, y)
-    a, b, r_x, r_y, theta = params
-    x_rot = np.cos(theta) * (x - a) + np.sin(theta) * (y - b)
-    y_rot = -np.sin(theta) * (x - a) + np.cos(theta) * (y - b)
-    distances = (x_rot / r_x) ** 2 + (y_rot / r_y) ** 2
+    a, b, x0, y0, theta = params
+    distances = np.sqrt(((x - x0) * np.cos(theta) + (y - y0) * np.sin(theta))**2 / a**2 +
+                        (-(x - x0) * np.sin(theta) + (y - y0) * np.cos(theta))**2 / b**2)
     return np.all(np.abs(distances - 1) < tolerance)
 
 def is_rectangle(points, tolerance=0.1):
-    if len(points) < 4:
-        return False
-    hull = ConvexHull(points)
-    hull_points = points[hull.vertices]
-    return np.isclose(len(hull_points), 4) and np.isclose(np.linalg.norm(hull_points[0] - hull_points[1]), np.linalg.norm(hull_points[1] - hull_points[2]), atol=tolerance)
+    polygon = Polygon(points)
+    return polygon.is_valid and len(polygon.exterior.coords) == 5
 
 def is_polygon(points, tolerance=0.1):
-    if len(points) < 3:
-        return False
-    hull = ConvexHull(points)
-    return np.isclose(len(hull.vertices), len(points))
+    polygon = Polygon(points)
+    return polygon.is_valid and len(polygon.exterior.coords) > 3
 
 def is_star(points, tolerance=0.1):
-    center = np.mean(points, axis=0)
-    distances = np.linalg.norm(points - center, axis=1)
-    num_points = len(points)
-    angles = np.angle(points[:, 0] + 1j * points[:, 1])
-    angle_diff = np.abs(np.diff(np.concatenate((angles, [angles[0]]))) % (2 * np.pi))
-    return num_points >= 5 and np.all(angle_diff > (2 * np.pi / num_points) - tolerance)
+    centroid = np.mean(points, axis=0)
+    distances = np.linalg.norm(points - centroid, axis=1)
+    if len(set(np.round(distances, 2))) > 5:
+        return False
+    return True
 
-# Convert polyline to cubic Bézier curves
 def polyline_to_bezier(points):
-    def bezier(t, p0, p1, p2, p3):
-        return (1-t)**3 * p0 + 3*(1-t)**2 * t * p1 + 3*(1-t) * t**2 * p2 + t**3 * p3
-
-    points = np.array(points)
     bezier_curves = []
-    for i in range(0, len(points) - 3, 3):
-        p0, p1, p2, p3 = points[i:i+4]
-        bezier_curve = "M {} {} C {} {} {} {} {} {}".format(
-            p0[0], p0[1], p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]
-        )
-        bezier_curves.append(bezier_curve)
+    for i in range(len(points) - 1):
+        start = points[i]
+        end = points[i + 1]
+        control1 = (start + end) / 2
+        control2 = (start + end) / 2
+        bezier_curves.append(f'M {start[0]} {start[1]} C {control1[0]} {control1[1]}, {control2[0]} {control2[1]}, {end[0]} {end[1]}')
     return bezier_curves
+
 
 def create_svg_file(bezier_curves, output_file):
     dwg = svgwrite.Drawing(output_file, profile='tiny')
@@ -114,36 +106,80 @@ def create_svg_file(bezier_curves, output_file):
     dwg.save()
 
 
+def extract_curves_from_image(image_file):
+    image = cv2.imread(image_file, cv2.IMREAD_GRAYSCALE)
+    edges = cv2.Canny(image, 50, 150)
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    return [contour.reshape(-1, 2) for contour in contours]
+
+def load_datasets(dataset_paths):
+    data = []
+    for path in dataset_paths:
+        df = pd.read_csv(path)
+        df = rename_columns(df) 
+        data.append(df)
+    return data
+
+def rename_columns(df):
+
+    df.columns = ['x', 'y', 'sol_x', 'sol_y']
+    return df
+
+def process_dataset(dataset):
+    x = dataset['x'].values
+    y = dataset['y'].values
+
+    print("Fitting Circle...")
+    circle_params = fit_circle(x, y)
+    print(f"Circle Parameters: {circle_params}")
+
+    print("Fitting Ellipse...")
+    ellipse_params = fit_ellipse(x, y)
+    print(f"Ellipse Parameters: {ellipse_params}")
+
 def main():
-    file_paths = [
-        'dataset/frag0.csv', 'dataset/frag1.csv', 'dataset/frag01_sol.csv',
-        'dataset/frag2.csv', 'dataset/frag2_sol.csv', 'dataset/isolated.csv',
-        'dataset/isolated_sol.csv', 'dataset/occlusion1.csv', 'dataset/occlusion1_sol.csv',
-        'dataset/occlusion2.csv', 'dataset/occlusion2_sol.csv'
+    # Load and process datasets
+    dataset_paths = [
+        'dataset/frag0.csv',
+        'dataset/frag1.csv',
+      #  'dataset/frag01_sol.csv',
+        'dataset/frag2.csv',
+       # 'dataset/frag2_sol.csv',
+        'dataset/isolated.csv',
+       # 'dataset/isolated_sol.csv',
+        'dataset/occlusion1.csv',
+       # 'dataset/occlusion1_sol.csv',
+        'dataset/occlusion2.csv',
+      #  'dataset/occlusion2_sol.csv'
     ]
+    datasets = load_datasets(dataset_paths)
     
-
-    data_frames = load_data(file_paths)
-    visualize_data(data_frames)
+    for i, dataset in enumerate(datasets):
+        print(f"Processing Dataset {i+1}")
+        process_dataset(dataset)
+        print("Finished processing dataset\n")
     
+   
+    image_files = ["images/img.png", "images/occlusion2_rec.png"]
+    for image_file in image_files:
+        curves = extract_curves_from_image(image_file)
+        for points in curves:
+            points = np.array(points)
+            if is_circle(points):
+                print(f"Detected a circle in {image_file}")
+            elif is_ellipse(points):
+                print(f"Detected an ellipse in {image_file}")
+            elif is_rectangle(points):
+                print(f"Detected a rectangle in {image_file}")
+            elif is_polygon(points):
+                print(f"Detected a polygon in {image_file}")
+            elif is_star(points):
+                print(f"Detected a star in {image_file}")
+            else:
+                print(f"Shape in {image_file} could not be regularized")
+            
+            bezier_curves = polyline_to_bezier(points)
+            create_svg_file(bezier_curves, f"{image_file}_output.svg")
 
-    for path, df in data_frames.items():
-        points = np.array(df[[2, 3]])
-        regularized_curves = []
-        if is_circle(points):
-            regularized_curves.append('circle')
-        elif is_ellipse(points):
-            regularized_curves.append('ellipse')
-        elif is_rectangle(points):
-            regularized_curves.append('rectangle')
-        elif is_polygon(points):
-            regularized_curves.append('polygon')
-        elif is_star(points):
-            regularized_curves.append('star')
-        
-        bezier_curves = polyline_to_bezier(points)
-        output_file = f'output_{path.split("/")[-1].replace(".csv", ".svg")}'
-        create_svg_file(bezier_curves, output_file)
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
